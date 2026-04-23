@@ -194,9 +194,9 @@
     const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
     dirLight.position.set(0, 1, 2);
     scene.add(dirLight);
-    scene.add(Object.assign(new THREE.DirectionalLight(0xffffff, 1.0), {
-      position: new THREE.Vector3(0, -1, 1)
-    }));
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    fillLight.position.set(0, -1, 1);
+    scene.add(fillLight);
 
     // ── Load GLB ──────────────────────────────────────────────────────────────
     let headModel = null;
