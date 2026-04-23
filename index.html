@@ -43,6 +43,7 @@
       background: #000;
       border-radius: 12px;
       overflow: hidden;
+      /* 尺寸由 JS 控制 */
     }
     #webcam {
       position: absolute;
@@ -62,25 +63,13 @@
       color: #aaa;
       height: 20px;
     }
-    #streamBtn {
-      margin-top: 10px;
-      background: #1a8a1a;
-      color: #fff;
-      border: none;
-      border-radius: 8px;
-      padding: 8px 28px;
-      font-size: 1rem;
-      cursor: pointer;
-    }
-    #streamBtn.connected { background: #c00; }
-    #streamStatus { margin-top: 6px; font-size: 0.78rem; color: #888; }
     #obs-tip {
-      margin-top: 8px;
+      margin-top: 10px;
       font-size: 0.75rem;
-      color: #555;
-      max-width: 700px;
+      color: #666;
+      max-width: 640px;
       text-align: center;
-      line-height: 1.8;
+      line-height: 1.6;
     }
     #obs-tip b { color: #aaa; }
   </style>
@@ -121,11 +110,8 @@
   </div>
 
   <div id="status">正在初始化…</div>
-
-  <button id="streamBtn">开始推流到 OBS</button>
-  <div id="streamStatus">点击按钮后，在 OBS 添加浏览器源 → http://localhost:8765/viewer.html</div>
   <div id="obs-tip">
-    <b>OBS：</b>来源 → 浏览器源 → URL: <b>http://localhost:8765/viewer.html</b> → 宽854 高480
+    <b>OBS 推流：</b>来源 → 浏览器源 → URL 填 <b>http://localhost:8765</b>，宽高与上方选择一致，勾选"关闭时刷新"
   </div>
 
   <script type="module">
@@ -136,18 +122,26 @@
       FilesetResolver,
     } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
 
+    // ── 尺寸切换 ─────────────────────────────────────────────────────────────
+    const SIZES = {
+      "169": { w: 1280, h: 720  },
+      "916": { w: 720,  h: 1280 },
+    };
+    // 页面显示用的尺寸（缩小到屏幕内）
     const DISPLAY = {
-      "169": { w: 854, h: 480 },
-      "916": { w: 270, h: 480 },
+      "169": { w: 854,  h: 480  },
+      "916": { w: 270,  h: 480  },
     };
 
-    const stage  = document.getElementById("stage");
-    const canvas = document.getElementById("overlay");
-    const video  = document.getElementById("webcam");
+    let currentMode = "169";
+    const stage   = document.getElementById("stage");
+    const canvas  = document.getElementById("overlay");
+    const video   = document.getElementById("webcam");
 
     let renderer, camera;
 
     function applySize(mode) {
+      currentMode = mode;
       const d = DISPLAY[mode];
       stage.style.width  = d.w + "px";
       stage.style.height = d.h + "px";
@@ -165,14 +159,18 @@
     document.getElementById("btn169").onclick = () => applySize("169");
     document.getElementById("btn916").onclick = () => applySize("916");
 
+    // ── Sliders ───────────────────────────────────────────────────────────────
     const scaleSlider = document.getElementById("scaleSlider");
     const ySlider     = document.getElementById("ySlider");
     const zSlider     = document.getElementById("zSlider");
+    const scaleValEl  = document.getElementById("scaleVal");
+    const yValEl      = document.getElementById("yVal");
+    const zValEl      = document.getElementById("zVal");
     const statusEl    = document.getElementById("status");
 
-    scaleSlider.oninput = () => document.getElementById("scaleVal").textContent = (+scaleSlider.value).toFixed(1);
-    ySlider.oninput     = () => document.getElementById("yVal").textContent     = (+ySlider.value).toFixed(2);
-    zSlider.oninput     = () => document.getElementById("zVal").textContent     = (+zSlider.value).toFixed(2);
+    scaleSlider.oninput = () => scaleValEl.textContent = (+scaleSlider.value).toFixed(1);
+    ySlider.oninput     = () => yValEl.textContent     = (+ySlider.value).toFixed(2);
+    zSlider.oninput     = () => zValEl.textContent     = (+zSlider.value).toFixed(2);
 
     // ── Three.js ──────────────────────────────────────────────────────────────
     const d0 = DISPLAY["169"];
@@ -262,6 +260,7 @@
       function applyFaceMatrix(matData) {
         mpMat.fromArray(matData);
         mpMat.decompose(tmpPos, tmpQ, tmpSc);
+
         headModel.position.set(
           -tmpPos.x,
           tmpPos.y + (+ySlider.value),
@@ -288,77 +287,6 @@
         renderer.render(scene, camera);
       }
       requestAnimationFrame(tick);
-
-      // ── WebRTC 推流 ─────────────────────────────────────────────────────────
-      // 把 video + canvas overlay 合成到一个离屏 canvas 再推流
-      const streamCanvas = document.createElement("canvas");
-      streamCanvas.width  = d0.w;
-      streamCanvas.height = d0.h;
-      const sCtx = streamCanvas.getContext("2d");
-
-      // 每帧把 video（镜像）+ overlay canvas 合成
-      function compositeFrame() {
-        const w = canvas.width, h = canvas.height;
-        streamCanvas.width  = w;
-        streamCanvas.height = h;
-        // 1. 镜像画视频
-        sCtx.save();
-        sCtx.scale(-1, 1);
-        sCtx.drawImage(video, -w, 0, w, h);
-        sCtx.restore();
-        // 2. 叠加 Three.js overlay
-        sCtx.drawImage(canvas, 0, 0, w, h);
-        requestAnimationFrame(compositeFrame);
-      }
-      requestAnimationFrame(compositeFrame);
-
-      const streamBtn    = document.getElementById("streamBtn");
-      const streamStatus = document.getElementById("streamStatus");
-      let pc = null, ws = null;
-
-      streamBtn.onclick = () => {
-        if (pc) {
-          pc.close(); pc = null;
-          ws && ws.close(); ws = null;
-          streamBtn.textContent = "开始推流到 OBS";
-          streamBtn.classList.remove("connected");
-          streamStatus.textContent = "已停止推流";
-          return;
-        }
-
-        const proto = location.protocol === "https:" ? "wss" : "ws";
-        ws = new WebSocket(`${proto}://${location.host}`);
-        pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
-        const stream = streamCanvas.captureStream(30);
-        stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-        ws.onopen = () => {
-          ws.send(JSON.stringify({ type: "join", room: "elephant" }));
-          streamStatus.textContent = "等待 OBS viewer 连接…";
-        };
-
-        ws.onmessage = async ({ data }) => {
-          const msg = JSON.parse(data);
-          if (msg.type === "peer-joined") {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription }));
-          } else if (msg.type === "answer") {
-            await pc.setRemoteDescription(msg.sdp);
-            streamBtn.textContent = "停止推流";
-            streamBtn.classList.add("connected");
-            streamStatus.textContent = "推流中 ✅ OBS 已接收画面";
-          } else if (msg.type === "candidate" && msg.candidate) {
-            await pc.addIceCandidate(msg.candidate);
-          }
-        };
-
-        pc.onicecandidate = ({ candidate }) => {
-          if (candidate && ws.readyState === 1)
-            ws.send(JSON.stringify({ type: "candidate", candidate }));
-        };
-      };
     }
   </script>
 </body>
