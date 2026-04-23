@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>蓝象头套 - Face AR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding-bottom: 24px;
+    }
+    h1 { margin: 14px 0 8px; font-size: 1.3rem; letter-spacing: 1px; }
+    #controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    label { font-size: 0.85rem; color: #aaa; }
+    input[type=range] { width: 120px; vertical-align: middle; }
+    span.val { width: 42px; display: inline-block; text-align: right; font-size: 0.85rem; }
+    .btn {
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 6px;
+      padding: 4px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .btn.active { background: #0a84ff; border-color: #0a84ff; }
+    #stage {
+      position: relative;
+      background: #000;
+      border-radius: 12px;
+      overflow: hidden;
+      /* 尺寸由 JS 控制 */
+    }
+    #webcam {
+      position: absolute;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: #aaa;
+      height: 20px;
+    }
+    #obs-tip {
+      margin-top: 10px;
+      font-size: 0.75rem;
+      color: #666;
+      max-width: 640px;
+      text-align: center;
+      line-height: 1.6;
+    }
+    #obs-tip b { color: #aaa; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <h1>🐘 蓝象头套 AR</h1>
+
+  <div id="controls">
+    <button class="btn active" id="btn169">16:9 横版</button>
+    <button class="btn"        id="btn916">9:16 竖版</button>
+
+    <label>缩放
+      <input type="range" id="scaleSlider" min="0.5" max="100.0" step="0.5" value="45.0" />
+      <span class="val" id="scaleVal">45.0</span>
+    </label>
+    <label>Y 偏移
+      <input type="range" id="ySlider" min="-10.0" max="10.0" step="0.05" value="0.0" />
+      <span class="val" id="yVal">0.00</span>
+    </label>
+    <label>前后偏移
+      <input type="range" id="zSlider" min="-10.0" max="10.0" step="0.05" value="0.0" />
+      <span class="val" id="zVal">0.00</span>
+    </label>
+  </div>
+
+  <div id="stage">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div id="status">正在初始化…</div>
+  <div id="obs-tip">
+    <b>OBS 推流：</b>来源 → 浏览器源 → URL 填 <b>http://localhost:8765</b>，宽高与上方选择一致，勾选"关闭时刷新"
+  </div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import {
+      FaceLandmarker,
+      FilesetResolver,
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs";
+
+    // ── 尺寸切换 ─────────────────────────────────────────────────────────────
+    const SIZES = {
+      "169": { w: 1280, h: 720  },
+      "916": { w: 720,  h: 1280 },
+    };
+    // 页面显示用的尺寸（缩小到屏幕内）
+    const DISPLAY = {
+      "169": { w: 854,  h: 480  },
+      "916": { w: 270,  h: 480  },
+    };
+
+    let currentMode = "169";
+    const stage   = document.getElementById("stage");
+    const canvas  = document.getElementById("overlay");
+    const video   = document.getElementById("webcam");
+
+    let renderer, camera;
+
+    function applySize(mode) {
+      currentMode = mode;
+      const d = DISPLAY[mode];
+      stage.style.width  = d.w + "px";
+      stage.style.height = d.h + "px";
+      canvas.width  = d.w;
+      canvas.height = d.h;
+      if (renderer) {
+        renderer.setSize(d.w, d.h);
+        camera.aspect = d.w / d.h;
+        camera.updateProjectionMatrix();
+      }
+      document.getElementById("btn169").classList.toggle("active", mode === "169");
+      document.getElementById("btn916").classList.toggle("active", mode === "916");
+    }
+
+    document.getElementById("btn169").onclick = () => applySize("169");
+    document.getElementById("btn916").onclick = () => applySize("916");
+
+    // ── Sliders ───────────────────────────────────────────────────────────────
+    const scaleSlider = document.getElementById("scaleSlider");
+    const ySlider     = document.getElementById("ySlider");
+    const zSlider     = document.getElementById("zSlider");
+    const scaleValEl  = document.getElementById("scaleVal");
+    const yValEl      = document.getElementById("yVal");
+    const zValEl      = document.getElementById("zVal");
+    const statusEl    = document.getElementById("status");
+
+    scaleSlider.oninput = () => scaleValEl.textContent = (+scaleSlider.value).toFixed(1);
+    ySlider.oninput     = () => yValEl.textContent     = (+ySlider.value).toFixed(2);
+    zSlider.oninput     = () => zValEl.textContent     = (+zSlider.value).toFixed(2);
+
+    // ── Three.js ──────────────────────────────────────────────────────────────
+    const d0 = DISPLAY["169"];
+    canvas.width  = d0.w;
+    canvas.height = d0.h;
+    stage.style.width  = d0.w + "px";
+    stage.style.height = d0.h + "px";
+
+    renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setSize(d0.w, d0.h);
+    renderer.setPixelRatio(1);
+    renderer.setClearColor(0x000000, 0);
+
+    const scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(60, d0.w / d0.h, 0.01, 100);
+    camera.position.set(0, 0, 2);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    dirLight.position.set(0, 1, 2);
+    scene.add(dirLight);
+    const fillLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    fillLight.position.set(0, -1, 1);
+    scene.add(fillLight);
+
+    // ── Load GLB ──────────────────────────────────────────────────────────────
+    let headModel = null;
+    statusEl.textContent = "正在加载 GLB 模型…";
+
+    new GLTFLoader().load(
+      "./Meshy_AI_Blue_Elephant.glb",
+      (gltf) => {
+        headModel = gltf.scene;
+        const box    = new THREE.Box3().setFromObject(headModel);
+        const center = box.getCenter(new THREE.Vector3());
+        const size   = box.getSize(new THREE.Vector3());
+        headModel.position.sub(center);
+        headModel.scale.setScalar(1 / Math.max(size.x, size.y, size.z));
+        headModel.visible = false;
+        scene.add(headModel);
+        statusEl.textContent = "模型已加载，正在启动摄像头…";
+        startCamera();
+      },
+      undefined,
+      (err) => { statusEl.textContent = "GLB 加载失败: " + err.message; }
+    );
+
+    // ── Camera ────────────────────────────────────────────────────────────────
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" }, audio: false,
+        });
+        video.srcObject = stream;
+        await new Promise(r => { video.onloadeddata = r; });
+        statusEl.textContent = "正在加载 MediaPipe…";
+        startMediaPipe();
+      } catch (e) {
+        statusEl.textContent = "摄像头访问失败: " + e.message;
+      }
+    }
+
+    // ── MediaPipe ─────────────────────────────────────────────────────────────
+    async function startMediaPipe() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
+      );
+      const landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "GPU",
+        },
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: true,
+        runningMode: "VIDEO",
+        numFaces: 1,
+      });
+
+      statusEl.textContent = "运行中 ✅";
+
+      const mpMat  = new THREE.Matrix4();
+      const tmpQ   = new THREE.Quaternion();
+      const tmpPos = new THREE.Vector3();
+      const tmpSc  = new THREE.Vector3();
+
+      function applyFaceMatrix(matData) {
+        mpMat.fromArray(matData);
+        mpMat.decompose(tmpPos, tmpQ, tmpSc);
+
+        headModel.position.set(
+          -tmpPos.x,
+          tmpPos.y + (+ySlider.value),
+          tmpPos.z + (+zSlider.value)
+        );
+        headModel.quaternion.set(tmpQ.x, -tmpQ.y, -tmpQ.z, tmpQ.w);
+        headModel.quaternion.normalize();
+        headModel.scale.setScalar(+scaleSlider.value);
+      }
+
+      let lastTime = -1;
+      function tick(now) {
+        requestAnimationFrame(tick);
+        if (video.readyState >= 2 && now !== lastTime) {
+          lastTime = now;
+          const result = landmarker.detectForVideo(video, now);
+          if (result.facialTransformationMatrixes?.length > 0) {
+            headModel.visible = true;
+            applyFaceMatrix(result.facialTransformationMatrixes[0].data);
+          } else {
+            headModel.visible = false;
+          }
+        }
+        renderer.render(scene, camera);
+      }
+      requestAnimationFrame(tick);
+    }
+  </script>
+</body>
+</html>
