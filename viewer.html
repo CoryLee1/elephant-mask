@@ -17,7 +17,7 @@
     const statusEl = document.getElementById("status");
     const remoteVideo = document.getElementById("remoteVideo");
 
-    const ws = new WebSocket(`ws://${location.host}`);
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
     const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
     ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: "elephant" }));

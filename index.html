@@ -332,7 +332,7 @@
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       stream.getTracks().forEach(t => pc.addTrack(t, stream));
 
-      ws = new WebSocket(`ws://${location.host}`);
+      ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 
       ws.onopen = () => {
         ws.send(JSON.stringify({ type: "join", room: "elephant" }));
