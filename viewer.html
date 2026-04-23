@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8"/>
+  <title>OBS Viewer</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#000; display:flex; justify-content:center; align-items:center; height:100vh; }
+    video { max-width:100%; max-height:100%; }
+    #status { position:fixed; top:10px; left:10px; color:#fff; font-family:sans-serif; font-size:14px; background:rgba(0,0,0,0.5); padding:4px 8px; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <video id="remoteVideo" autoplay playsinline muted></video>
+  <div id="status">等待推流端连接…</div>
+  <script>
+    const statusEl = document.getElementById("status");
+    const remoteVideo = document.getElementById("remoteVideo");
+
+    const ws = new WebSocket(`ws://${location.host}`);
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+    ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: "elephant" }));
+
+    ws.onmessage = async ({ data }) => {
+      const msg = JSON.parse(data);
+      if (msg.type === "offer") {
+        await pc.setRemoteDescription(msg.sdp);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription }));
+        statusEl.textContent = "已连接 ✅";
+      } else if (msg.type === "candidate" && msg.candidate) {
+        await pc.addIceCandidate(msg.candidate);
+      }
+    };
+
+    pc.ontrack = (e) => {
+      remoteVideo.srcObject = e.streams[0];
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) ws.send(JSON.stringify({ type: "candidate", candidate }));
+    };
+  </script>
+</body>
+</html>
