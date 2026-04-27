@@ -17,10 +17,18 @@
     const statusEl = document.getElementById("status");
     const remoteVideo = document.getElementById("remoteVideo");
 
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
+    const signalParam = new URLSearchParams(location.search).get("signal");
+    const defaultSignal = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+    const SIGNAL_URL = signalParam || defaultSignal;
+    statusEl.textContent = `等待推流端连接… 信令: ${SIGNAL_URL}`;
+
+    const ws = new WebSocket(SIGNAL_URL);
     const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
     ws.onopen = () => ws.send(JSON.stringify({ type: "join", room: "elephant" }));
+    ws.onerror = () => {
+      statusEl.textContent = "信令连接失败，请检查 signal 参数或后端地址";
+    };
 
     ws.onmessage = async ({ data }) => {
       const msg = JSON.parse(data);

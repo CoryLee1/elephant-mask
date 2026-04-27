@@ -13,28 +13,29 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      min-height: 100vh;
-      padding-bottom: 24px;
+      height: 100vh;
+      overflow: hidden;
+      padding: 8px 10px 12px;
     }
-    h1 { margin: 14px 0 8px; font-size: 1.3rem; letter-spacing: 1px; }
+    h1 { margin: 0 0 6px; font-size: 1.1rem; letter-spacing: 1px; }
     #controls {
       display: flex;
-      gap: 12px;
-      margin-bottom: 10px;
+      gap: 10px;
+      margin-bottom: 8px;
       align-items: center;
       flex-wrap: wrap;
       justify-content: center;
     }
-    label { font-size: 0.85rem; color: #aaa; }
-    input[type=range] { width: 120px; vertical-align: middle; }
-    span.val { width: 42px; display: inline-block; text-align: right; font-size: 0.85rem; }
+    label { font-size: 0.78rem; color: #aaa; }
+    input[type=range] { width: 110px; vertical-align: middle; }
+    span.val { width: 42px; display: inline-block; text-align: right; font-size: 0.78rem; }
     .btn {
       background: #333;
       color: #fff;
       border: 1px solid #555;
       border-radius: 6px;
-      padding: 4px 14px;
-      font-size: 0.85rem;
+      padding: 4px 12px;
+      font-size: 0.78rem;
       cursor: pointer;
     }
     .btn.active { background: #0a84ff; border-color: #0a84ff; }
@@ -58,18 +59,18 @@
       pointer-events: none;
     }
     #status {
-      margin-top: 8px;
-      font-size: 0.78rem;
+      margin-top: 6px;
+      font-size: 0.72rem;
       color: #aaa;
-      height: 20px;
+      min-height: 16px;
     }
     #obs-tip {
-      margin-top: 10px;
-      font-size: 0.75rem;
+      margin-top: 6px;
+      font-size: 0.68rem;
       color: #666;
-      max-width: 640px;
+      max-width: min(920px, 96vw);
       text-align: center;
-      line-height: 1.6;
+      line-height: 1.35;
     }
     #obs-tip b { color: #aaa; }
   </style>
@@ -111,7 +112,7 @@
 
   <div id="status">正在初始化…</div>
   <div id="obs-tip">
-    <b>OBS 推流：</b>来源 → 浏览器源 → URL 填 <b>http://localhost:8765</b>，宽高与上方选择一致，勾选"关闭时刷新"
+    <b>OBS 推流：</b>来源 → 浏览器源 → URL 填 <b>http://localhost:8765</b>（或你的 Pages 地址），宽高与上方选择一致，勾选"关闭时刷新"
   </div>
 
   <script type="module">
@@ -127,22 +128,42 @@
       "169": { w: 1280, h: 720  },
       "916": { w: 720,  h: 1280 },
     };
-    // 页面显示用的尺寸（缩小到屏幕内）
-    const DISPLAY = {
-      "169": { w: 854,  h: 480  },
-      "916": { w: 270,  h: 480  },
-    };
-
     let currentMode = "169";
     const stage   = document.getElementById("stage");
     const canvas  = document.getElementById("overlay");
     const video   = document.getElementById("webcam");
+    const titleEl = document.querySelector("h1");
+    const controlsEl = document.getElementById("controls");
+    const statusEl    = document.getElementById("status");
+    const obsTipEl = document.getElementById("obs-tip");
 
     let renderer, camera;
 
+    function getDisplaySize(mode) {
+      const source = SIZES[mode];
+      const aspect = source.w / source.h;
+      const reservedHeight =
+        titleEl.offsetHeight +
+        controlsEl.offsetHeight +
+        statusEl.offsetHeight +
+        obsTipEl.offsetHeight +
+        42;
+      const maxW = Math.max(240, window.innerWidth - 20);
+      const maxH = Math.max(240, window.innerHeight - reservedHeight);
+      let w = maxW;
+      let h = w / aspect;
+
+      if (h > maxH) {
+        h = maxH;
+        w = h * aspect;
+      }
+
+      return { w: Math.round(w), h: Math.round(h) };
+    }
+
     function applySize(mode) {
       currentMode = mode;
-      const d = DISPLAY[mode];
+      const d = getDisplaySize(mode);
       stage.style.width  = d.w + "px";
       stage.style.height = d.h + "px";
       canvas.width  = d.w;
@@ -158,6 +179,7 @@
 
     document.getElementById("btn169").onclick = () => applySize("169");
     document.getElementById("btn916").onclick = () => applySize("916");
+    window.addEventListener("resize", () => applySize(currentMode));
 
     // ── Sliders ───────────────────────────────────────────────────────────────
     const scaleSlider = document.getElementById("scaleSlider");
@@ -166,14 +188,12 @@
     const scaleValEl  = document.getElementById("scaleVal");
     const yValEl      = document.getElementById("yVal");
     const zValEl      = document.getElementById("zVal");
-    const statusEl    = document.getElementById("status");
-
     scaleSlider.oninput = () => scaleValEl.textContent = (+scaleSlider.value).toFixed(1);
     ySlider.oninput     = () => yValEl.textContent     = (+ySlider.value).toFixed(2);
     zSlider.oninput     = () => zValEl.textContent     = (+zSlider.value).toFixed(2);
 
     // ── Three.js ──────────────────────────────────────────────────────────────
-    const d0 = DISPLAY["169"];
+    const d0 = getDisplaySize("169");
     canvas.width  = d0.w;
     canvas.height = d0.h;
     stage.style.width  = d0.w + "px";
@@ -233,6 +253,14 @@
       }
     }
 
+    // ── 信令服务地址 ────────────────────────────────────────────────────────────
+    // 允许通过 URL 参数 signal 覆盖，例如：
+    // ?signal=wss://your-signaling-server.example.com
+    const signalParam = new URLSearchParams(location.search).get("signal");
+    const defaultSignal = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+    const SIGNAL_URL = signalParam || defaultSignal;
+    statusEl.textContent = `信令地址: ${SIGNAL_URL}`;
+
     // ── MediaPipe ─────────────────────────────────────────────────────────────
     async function startMediaPipe() {
       const vision = await FilesetResolver.forVisionTasks(
@@ -287,6 +315,44 @@
         renderer.render(scene, camera);
       }
       requestAnimationFrame(tick);
+
+      // 建立 WebRTC 推流连接（推送本页合成画面到 viewer.html）
+      startBroadcast();
+
+      async function startBroadcast() {
+        const ws = new WebSocket(SIGNAL_URL);
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+        const stream = canvas.captureStream(30);
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: "join", room: "elephant" }));
+        };
+
+        ws.onmessage = async ({ data }) => {
+          const msg = JSON.parse(data);
+          if (msg.type === "peer-joined") {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription }));
+          } else if (msg.type === "answer") {
+            await pc.setRemoteDescription(msg.sdp);
+          } else if (msg.type === "candidate" && msg.candidate) {
+            await pc.addIceCandidate(msg.candidate);
+          }
+        };
+
+        ws.onerror = () => {
+          statusEl.textContent = "信令连接失败，请检查 signal 参数或后端地址";
+        };
+
+        pc.onicecandidate = ({ candidate }) => {
+          if (candidate && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: "candidate", candidate }));
+          }
+        };
+      }
     }
   </script>
 </body>
